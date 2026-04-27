@@ -267,10 +267,11 @@ async def show(interaction: discord.Interaction):
     
     for key, data in list(licenses_cache.items())[:10]:
         username = data.get('username') or "N/A"
+        generated_by = data.get('generated_by', 'Unknown')
         used_str = "✅ Used" if data.get('used') else "⬜ Available"
         embed.add_field(
             name=f"`{key}`",
-            value=f"**User:** {username}\n**Status:** {used_str}\n**Generated:** {data['generated_at'][:10]}",
+            value=f"**Username:** {username}\n**Discord Owner:** <@{generated_by}>\n**Status:** {used_str}\n**Generated:** {data['generated_at'][:10]}",
             inline=False
         )
     
@@ -278,6 +279,90 @@ async def show(interaction: discord.Interaction):
         embed.set_footer(text=f"Showing 10 of {len(licenses_cache)} keys")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="purge", description="Delete license keys in bulk (Admin only)")
+@app_commands.check(is_admin)
+@app_commands.describe(mode="Purge mode: all, keys, or username")
+@app_commands.describe(keys="Comma-separated keys to delete (for keys mode)")
+@app_commands.describe(username="Username to delete keys for (for username mode)")
+async def purge(interaction: discord.Interaction, mode: str, keys: str = None, username: str = None):
+    mode = mode.lower()
+    deleted_count = 0
+    
+    if mode == "all":
+        deleted_count = len(licenses_cache)
+        licenses_cache.clear()
+        save_licenses()
+        
+        embed = discord.Embed(
+            title=f"🗑️ Purged All Keys",
+            description=f"Deleted **{deleted_count}** license keys.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    elif mode == "keys":
+        if not keys:
+            await interaction.response.send_message("Please provide keys to delete (comma-separated).", ephemeral=True)
+            return
+        
+        key_list = [k.strip().upper() for k in keys.split(',')]
+        deleted = []
+        not_found = []
+        
+        for key in key_list:
+            if key in licenses_cache:
+                del licenses_cache[key]
+                deleted.append(key)
+            else:
+                not_found.append(key)
+        
+        save_licenses()
+        
+        embed = discord.Embed(
+            title=f"🗑️ Purge Keys",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Deleted", value=f"{len(deleted)} keys", inline=True)
+        embed.add_field(name="Not Found", value=f"{len(not_found)} keys", inline=True)
+        
+        if deleted:
+            embed.add_field(name="Deleted Keys", value="\n".join([f"`{k}`" for k in deleted[:10]]), inline=False)
+        if not_found:
+            embed.add_field(name="Not Found", value="\n".join([f"`{k}`" for k in not_found[:10]]), inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    elif mode == "username":
+        if not username:
+            await interaction.response.send_message("Please provide a username.", ephemeral=True)
+            return
+        
+        keys_to_delete = [k for k, v in licenses_cache.items() if v.get('username') == username]
+        
+        if not keys_to_delete:
+            await interaction.response.send_message(f"No keys found for username `{username}`.", ephemeral=True)
+            return
+        
+        for key in keys_to_delete:
+            del licenses_cache[key]
+        
+        save_licenses()
+        
+        embed = discord.Embed(
+            title=f"🗑️ Purged by Username",
+            description=f"Deleted **{len(keys_to_delete)}** keys for username `{username}`.",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Deleted Keys", value="\n".join([f"`{k}`" for k in keys_to_delete[:10]]), inline=False)
+        
+        if len(keys_to_delete) > 10:
+            embed.set_footer(text=f"Showing 10 of {len(keys_to_delete)} deleted keys")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    else:
+        await interaction.response.send_message("Invalid mode. Use: all, keys, or username", ephemeral=True)
 
 @bot.tree.command(name="lookup", description="Look up a specific key (Admin only)")
 @app_commands.check(is_admin)
