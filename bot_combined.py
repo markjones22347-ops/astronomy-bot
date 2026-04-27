@@ -141,6 +141,15 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
             )
             return
         
+        # Check if username is already taken by another key
+        for existing_key, data in licenses_cache.items():
+            if data.get('username') == username and existing_key != key:
+                await interaction.response.send_message(
+                    f"❌ Username `{username}` is already registered to another key! Please choose a different username.",
+                    ephemeral=True
+                )
+                return
+        
         license_data = licenses_cache[key]
         
         # Check if key is already used
