@@ -10,7 +10,3 @@ services:
         value: 3.11.9
       - key: PORT
         value: 10000
-    disk:
-      name: license-data
-      mountPath: /opt/render/project/src
-      sizeGB: 1
