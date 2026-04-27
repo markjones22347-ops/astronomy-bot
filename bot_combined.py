@@ -1,7 +1,6 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
 import secrets
 import string
 import os
@@ -10,6 +9,9 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 
+# File paths
+LICENSES_FILE = "licenses.json"
+
 # Load .env file if present
 try:
     from dotenv import load_dotenv
@@ -17,15 +19,11 @@ try:
 except ImportError:
     pass
 
-# Database setup
 def init_db():
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS licenses
-                 (key TEXT PRIMARY KEY, username TEXT, generated_by TEXT, 
-                  generated_at TEXT, used BOOLEAN DEFAULT 0)''')
-    conn.commit()
-    conn.close()
+    """Initialize JSON file if it doesn't exist"""
+    if not os.path.exists(LICENSES_FILE):
+        with open(LICENSES_FILE, 'w') as f:
+            json.dump({}, f)
 
 def generate_key():
     return '-'.join([''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(4)])
@@ -77,26 +75,23 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
         key = key.replace("-", "")
         key = '-'.join([key[i:i+4] for i in range(0, 16, 4)])
         
-        conn = sqlite3.connect('licenses.db')
-        c = conn.cursor()
+        # Load licenses
+        with open(LICENSES_FILE, 'r') as f:
+            licenses = json.load(f)
         
         # Check if key exists
-        c.execute("SELECT * FROM licenses WHERE key = ?", (key,))
-        result = c.fetchone()
-        
-        if not result:
-            conn.close()
+        if key not in licenses:
             await interaction.response.send_message(
                 "❌ Invalid license key! Please check your key and try again.", 
                 ephemeral=True
             )
             return
         
-        key_id, existing_user, generated_by, generated_at, used = result
+        license_data = licenses[key]
         
         # Check if key is already used
-        if used:
-            if existing_user == username:
+        if license_data.get('used', False):
+            if license_data.get('username') == username:
                 await interaction.response.send_message(
                     f"✅ This key is already registered to you (`{username}`)!\n\n"
                     f"You can now use the client with:\n"
@@ -106,17 +101,18 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
                 )
             else:
                 await interaction.response.send_message(
-                    f"❌ This key is already registered to someone else (`{existing_user}`).\n"
+                    f"❌ This key is already registered to someone else (`{license_data.get('username')}`).\n"
                     f"Contact an admin if you believe this is an error.", 
                     ephemeral=True
                 )
-            conn.close()
             return
         
         # Register the key
-        c.execute("UPDATE licenses SET used = 1, username = ? WHERE key = ?", (username, key))
-        conn.commit()
-        conn.close()
+        licenses[key]['used'] = True
+        licenses[key]['username'] = username
+        
+        with open(LICENSES_FILE, 'w') as f:
+            json.dump(licenses, f, indent=2)
         
         # Success message
         embed = discord.Embed(
@@ -147,18 +143,22 @@ def is_admin(interaction: discord.Interaction) -> bool:
 @app_commands.check(is_admin)
 @app_commands.describe(count="Number of keys to generate")
 async def generate(interaction: discord.Interaction, count: int = 1):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
     keys = []
     for _ in range(count):
         key = generate_key()
-        c.execute("INSERT INTO licenses (key, generated_by, generated_at) VALUES (?, ?, ?)",
-                  (key, str(interaction.user.id), datetime.now().isoformat()))
+        licenses[key] = {
+            'username': None,
+            'generated_by': str(interaction.user.id),
+            'generated_at': datetime.now().isoformat(),
+            'used': False
+        }
         keys.append(key)
     
-    conn.commit()
-    conn.close()
+    with open(LICENSES_FILE, 'w') as f:
+        json.dump(licenses, f, indent=2)
     
     key_list = '\n'.join(keys)
     await interaction.response.send_message(f"Generated {count} key(s):\n```\n{key_list}\n```", ephemeral=True)
@@ -167,23 +167,24 @@ async def generate(interaction: discord.Interaction, count: int = 1):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to delete")
 async def delete(interaction: discord.Interaction, key: str):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM licenses WHERE key = ?", (key,))
-    conn.commit()
-    conn.close()
-    await interaction.response.send_message(f"Deleted key: `{key}`", ephemeral=True)
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
+    
+    if key in licenses:
+        del licenses[key]
+        with open(LICENSES_FILE, 'w') as f:
+            json.dump(licenses, f, indent=2)
+        await interaction.response.send_message(f"Deleted key: `{key}`", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Key not found: `{key}`", ephemeral=True)
 
 @bot.tree.command(name="show", description="Show all license keys (Admin only)")
 @app_commands.check(is_admin)
 async def show(interaction: discord.Interaction):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute("SELECT key, username, used, generated_at FROM licenses")
-    keys = c.fetchall()
-    conn.close()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    if not keys:
+    if not licenses:
         await interaction.response.send_message("No keys found.", ephemeral=True)
         return
     
@@ -191,10 +192,10 @@ async def show(interaction: discord.Interaction):
     message += f"{'Key':<20} {'Username':<15} {'Used':<5} {'Generated'}\n"
     message += "-" * 60 + "\n"
     
-    for key, username, used, generated_at in keys:
-        username = username or "N/A"
-        used_str = "Yes" if used else "No"
-        message += f"{key:<20} {username:<15} {used_str:<5} {generated_at[:10]}\n"
+    for key, data in licenses.items():
+        username = data.get('username') or "N/A"
+        used_str = "Yes" if data.get('used') else "No"
+        message += f"{key:<20} {username:<15} {used_str:<5} {data['generated_at'][:10]}\n"
     
     message += "```"
     
@@ -207,48 +208,44 @@ async def show(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to look up")
 async def lookup(interaction: discord.Interaction, key: str):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM licenses WHERE key = ?", (key,))
-    result = c.fetchone()
-    conn.close()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    if not result:
+    if key not in licenses:
         await interaction.response.send_message("Key not found.", ephemeral=True)
         return
     
-    key, username, generated_by, generated_at, used = result
-    status = "Used" if used else "Available"
+    data = licenses[key]
+    status = "Used" if data.get('used') else "Available"
     
     embed = discord.Embed(title="License Key Info", color=discord.Color.blue())
     embed.add_field(name="Key", value=f"`{key}`", inline=False)
     embed.add_field(name="Status", value=status, inline=True)
     embed.add_field(name="Username", value=username or "N/A", inline=True)
-    embed.add_field(name="Generated", value=generated_at[:19], inline=True)
+    embed.add_field(name="Generated", value=data['generated_at'][:19], inline=True)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="users", description="Show all registered users (Admin only)")
 @app_commands.check(is_admin)
 async def users(interaction: discord.Interaction):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute("SELECT username, key, generated_at FROM licenses WHERE used = 1 ORDER BY generated_at DESC")
-    results = c.fetchall()
-    conn.close()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    if not results:
+    registered = {k: v for k, v in licenses.items() if v.get('used')}
+    
+    if not registered:
         await interaction.response.send_message("No registered users found.", ephemeral=True)
         return
     
     embed = discord.Embed(title="Registered Users", color=discord.Color.green())
-    embed.description = f"Total registered users: **{len(results)}**"
+    embed.description = f"Total registered users: **{len(registered)}**"
     
-    for i, (username, key, date) in enumerate(results[:25]):
-        embed.add_field(name=f"{i+1}. {username}", value=f"Key: `{key}`\nDate: {date[:10]}", inline=False)
+    for i, (key, data) in enumerate(list(registered.items())[:25]):
+        embed.add_field(name=f"{i+1}. {data.get('username')}", value=f"Key: `{key}`\nDate: {data['generated_at'][:10]}", inline=False)
     
-    if len(results) > 25:
-        embed.set_footer(text=f"Showing 25 of {len(results)} users")
+    if len(registered) > 25:
+        embed.set_footer(text=f"Showing 25 of {len(registered)} users")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -256,37 +253,37 @@ async def users(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(username="Username to revoke")
 async def revoke(interaction: discord.Interaction, username: str):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    c.execute("SELECT key FROM licenses WHERE username = ? AND used = 1", (username,))
-    result = c.fetchone()
+    # Find user's key
+    key_to_revoke = None
+    for key, data in licenses.items():
+        if data.get('username') == username and data.get('used'):
+            key_to_revoke = key
+            break
     
-    if not result:
-        conn.close()
+    if not key_to_revoke:
         await interaction.response.send_message(f"User `{username}` not found or not active.", ephemeral=True)
         return
     
-    key = result[0]
-    c.execute("UPDATE licenses SET used = 0, username = NULL WHERE key = ?", (key,))
-    conn.commit()
-    conn.close()
+    # Reset the license
+    licenses[key_to_revoke]['used'] = False
+    licenses[key_to_revoke]['username'] = None
+    
+    with open(LICENSES_FILE, 'w') as f:
+        json.dump(licenses, f, indent=2)
     
     await interaction.response.send_message(f"✅ Revoked access for `{username}`. Key `{key}` is now available again.", ephemeral=True)
 
 @bot.tree.command(name="stats", description="Show license system statistics (Admin only)")
 @app_commands.check(is_admin)
 async def stats(interaction: discord.Interaction):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    c.execute("SELECT COUNT(*) FROM licenses")
-    total_keys = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM licenses WHERE used = 1")
-    used_keys = c.fetchone()[0]
-    
-    conn.close()
+    total_keys = len(licenses)
+    used_keys = sum(1 for data in licenses.values() if data.get('used'))
     
     embed = discord.Embed(title="License System Statistics", color=discord.Color.purple())
     embed.add_field(name="Total Keys", value=str(total_keys), inline=True)
@@ -300,13 +297,19 @@ async def stats(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to reset")
 async def resetkey(interaction: discord.Interaction, key: str):
-    conn = sqlite3.connect('licenses.db')
-    c = conn.cursor()
-    c.execute("UPDATE licenses SET used = 0, username = NULL WHERE key = ?", (key,))
-    conn.commit()
-    conn.close()
+    with open(LICENSES_FILE, 'r') as f:
+        licenses = json.load(f)
     
-    await interaction.response.send_message(f"🔄 Reset key `{key}` to available status.", ephemeral=True)
+    if key in licenses:
+        licenses[key]['used'] = False
+        licenses[key]['username'] = None
+        
+        with open(LICENSES_FILE, 'w') as f:
+            json.dump(licenses, f, indent=2)
+        
+        await interaction.response.send_message(f"🔄 Reset key `{key}` to available status.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Key not found: `{key}`", ephemeral=True)
 
 @bot.tree.command(name="register", description="Register your license key (Opens registration form)")
 async def register(interaction: discord.Interaction):
@@ -340,24 +343,23 @@ class VerificationHandler(BaseHTTPRequestHandler):
             key = data.get('key', '').upper()
             username = data.get('username', '')
             
-            conn = sqlite3.connect('licenses.db')
-            c = conn.cursor()
-            c.execute("SELECT * FROM licenses WHERE key = ?", (key,))
-            result = c.fetchone()
+            with open(LICENSES_FILE, 'r') as f:
+                licenses = json.load(f)
             
             response = {"valid": False}
             
-            if not result:
+            if key not in licenses:
                 response["error"] = "Invalid key"
-            elif result[4] and result[1] != username:  # used and different username
+            elif licenses[key].get('used') and licenses[key].get('username') != username:
                 response["error"] = "Key already used"
             else:
-                # Mark as used
-                c.execute("UPDATE licenses SET used = 1, username = ? WHERE key = ?", (username, key))
-                conn.commit()
+                licenses[key]['used'] = True
+                licenses[key]['username'] = username
+                
+                with open(LICENSES_FILE, 'w') as f:
+                    json.dump(licenses, f, indent=2)
+                
                 response = {"valid": True, "message": "License verified"}
-            
-            conn.close()
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
