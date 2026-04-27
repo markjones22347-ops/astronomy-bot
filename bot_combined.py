@@ -8,9 +8,7 @@ import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
-
-# File paths
-LICENSES_FILE = "licenses.json"
+import requests
 
 # Load .env file if present
 try:
@@ -19,11 +17,68 @@ try:
 except ImportError:
     pass
 
+# GitHub Gist for persistent storage
+GIST_ID = os.environ.get("GIST_ID")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+
+# In-memory cache
+licenses_cache = {}
+
+def load_licenses():
+    """Load licenses from GitHub Gist"""
+    global licenses_cache
+    if not GIST_ID or not GITHUB_TOKEN:
+        print("WARNING: GIST_ID or GITHUB_TOKEN not set. Using in-memory storage (will lose data on restart)")
+        return licenses_cache
+    
+    try:
+        url = f"https://api.github.com/gists/{GIST_ID}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            gist_data = response.json()
+            for filename, file_data in gist_data['files'].items():
+                if filename == "licenses.json":
+                    licenses_cache = json.loads(file_data['content'])
+                    print(f"Loaded {len(licenses_cache)} licenses from Gist")
+                    return licenses_cache
+    except Exception as e:
+        print(f"Failed to load from Gist: {e}")
+    
+    return licenses_cache
+
+def save_licenses():
+    """Save licenses to GitHub Gist"""
+    if not GIST_ID or not GITHUB_TOKEN:
+        print("WARNING: GIST_ID or GITHUB_TOKEN not set. Skipping save to Gist")
+        return
+    
+    try:
+        url = f"https://api.github.com/gists/{GIST_ID}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        data = {
+            "files": {
+                "licenses.json": {
+                    "content": json.dumps(licenses_cache, indent=2)
+                }
+            }
+        }
+        response = requests.patch(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            print(f"Saved {len(licenses_cache)} licenses to Gist")
+        else:
+            print(f"Failed to save to Gist: {response.status_code}")
+    except Exception as e:
+        print(f"Failed to save to Gist: {e}")
+
 def init_db():
-    """Initialize JSON file if it doesn't exist"""
-    if not os.path.exists(LICENSES_FILE):
-        with open(LICENSES_FILE, 'w') as f:
-            json.dump({}, f)
+    """Initialize licenses from Gist"""
+    global licenses_cache
+    licenses_cache = load_licenses()
+    if not licenses_cache:
+        licenses_cache = {}
 
 def generate_key():
     return '-'.join([''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(4)])
@@ -76,18 +131,17 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
         key = '-'.join([key[i:i+4] for i in range(0, 16, 4)])
         
         # Load licenses
-        with open(LICENSES_FILE, 'r') as f:
-            licenses = json.load(f)
+        licenses_cache = load_licenses()
         
         # Check if key exists
-        if key not in licenses:
+        if key not in licenses_cache:
             await interaction.response.send_message(
                 "❌ Invalid license key! Please check your key and try again.", 
                 ephemeral=True
             )
             return
         
-        license_data = licenses[key]
+        license_data = licenses_cache[key]
         
         # Check if key is already used
         if license_data.get('used', False):
@@ -113,11 +167,9 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
             return
         
         # Register the key
-        licenses[key]['used'] = True
-        licenses[key]['username'] = username
-        
-        with open(LICENSES_FILE, 'w') as f:
-            json.dump(licenses, f, indent=2)
+        licenses_cache[key]['used'] = True
+        licenses_cache[key]['username'] = username
+        save_licenses()
         
         # Success message
         embed = discord.Embed(
@@ -148,13 +200,10 @@ def is_admin(interaction: discord.Interaction) -> bool:
 @app_commands.check(is_admin)
 @app_commands.describe(count="Number of keys to generate")
 async def generate(interaction: discord.Interaction, count: int = 1):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
     keys = []
     for _ in range(count):
         key = generate_key()
-        licenses[key] = {
+        licenses_cache[key] = {
             'username': None,
             'generated_by': str(interaction.user.id),
             'generated_at': datetime.now().isoformat(),
@@ -162,8 +211,7 @@ async def generate(interaction: discord.Interaction, count: int = 1):
         }
         keys.append(key)
     
-    with open(LICENSES_FILE, 'w') as f:
-        json.dump(licenses, f, indent=2)
+    save_licenses()
     
     embed = discord.Embed(
         title=f"✅ Generated {count} License Key(s)",
@@ -178,13 +226,9 @@ async def generate(interaction: discord.Interaction, count: int = 1):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to delete")
 async def delete(interaction: discord.Interaction, key: str):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    if key in licenses:
-        del licenses[key]
-        with open(LICENSES_FILE, 'w') as f:
-            json.dump(licenses, f, indent=2)
+    if key in licenses_cache:
+        del licenses_cache[key]
+        save_licenses()
         
         embed = discord.Embed(
             title="✅ Key Deleted",
@@ -203,19 +247,16 @@ async def delete(interaction: discord.Interaction, key: str):
 @bot.tree.command(name="show", description="Show all license keys (Admin only)")
 @app_commands.check(is_admin)
 async def show(interaction: discord.Interaction):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    if not licenses:
+    if not licenses_cache:
         await interaction.response.send_message("No keys found.", ephemeral=True)
         return
     
     embed = discord.Embed(
-        title=f"📋 License Keys ({len(licenses)} total)",
+        title=f"📋 License Keys ({len(licenses_cache)} total)",
         color=discord.Color.blue()
     )
     
-    for key, data in list(licenses.items())[:10]:
+    for key, data in list(licenses_cache.items())[:10]:
         username = data.get('username') or "N/A"
         used_str = "✅ Used" if data.get('used') else "⬜ Available"
         embed.add_field(
@@ -224,8 +265,8 @@ async def show(interaction: discord.Interaction):
             inline=False
         )
     
-    if len(licenses) > 10:
-        embed.set_footer(text=f"Showing 10 of {len(licenses)} keys")
+    if len(licenses_cache) > 10:
+        embed.set_footer(text=f"Showing 10 of {len(licenses_cache)} keys")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -233,10 +274,7 @@ async def show(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to look up")
 async def lookup(interaction: discord.Interaction, key: str):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    if key not in licenses:
+    if key not in licenses_cache:
         embed = discord.Embed(
             title="❌ Key Not Found",
             description=f"The key `{key}` does not exist.",
@@ -245,7 +283,7 @@ async def lookup(interaction: discord.Interaction, key: str):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    data = licenses[key]
+    data = licenses_cache[key]
     status = "✅ Used" if data.get('used') else "⬜ Available"
     
     embed = discord.Embed(
@@ -262,10 +300,7 @@ async def lookup(interaction: discord.Interaction, key: str):
 @bot.tree.command(name="users", description="Show all registered users (Admin only)")
 @app_commands.check(is_admin)
 async def users(interaction: discord.Interaction):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    registered = {k: v for k, v in licenses.items() if v.get('used')}
+    registered = {k: v for k, v in licenses_cache.items() if v.get('used')}
     
     if not registered:
         await interaction.response.send_message("No registered users found.", ephemeral=True)
@@ -286,12 +321,9 @@ async def users(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(username="Username to revoke")
 async def revoke(interaction: discord.Interaction, username: str):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
     # Find user's key
     key_to_revoke = None
-    for key, data in licenses.items():
+    for key, data in licenses_cache.items():
         if data.get('username') == username and data.get('used'):
             key_to_revoke = key
             break
@@ -306,11 +338,9 @@ async def revoke(interaction: discord.Interaction, username: str):
         return
     
     # Reset the license
-    licenses[key_to_revoke]['used'] = False
-    licenses[key_to_revoke]['username'] = None
-    
-    with open(LICENSES_FILE, 'w') as f:
-        json.dump(licenses, f, indent=2)
+    licenses_cache[key_to_revoke]['used'] = False
+    licenses_cache[key_to_revoke]['username'] = None
+    save_licenses()
     
     embed = discord.Embed(
         title="✅ Access Revoked",
@@ -324,11 +354,8 @@ async def revoke(interaction: discord.Interaction, username: str):
 @bot.tree.command(name="stats", description="Show license system statistics (Admin only)")
 @app_commands.check(is_admin)
 async def stats(interaction: discord.Interaction):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    total_keys = len(licenses)
-    used_keys = sum(1 for data in licenses.values() if data.get('used'))
+    total_keys = len(licenses_cache)
+    used_keys = sum(1 for data in licenses_cache.values() if data.get('used'))
     
     embed = discord.Embed(title="License System Statistics", color=discord.Color.purple())
     embed.add_field(name="Total Keys", value=str(total_keys), inline=True)
@@ -342,15 +369,10 @@ async def stats(interaction: discord.Interaction):
 @app_commands.check(is_admin)
 @app_commands.describe(key="License key to reset")
 async def resetkey(interaction: discord.Interaction, key: str):
-    with open(LICENSES_FILE, 'r') as f:
-        licenses = json.load(f)
-    
-    if key in licenses:
-        licenses[key]['used'] = False
-        licenses[key]['username'] = None
-        
-        with open(LICENSES_FILE, 'w') as f:
-            json.dump(licenses, f, indent=2)
+    if key in licenses_cache:
+        licenses_cache[key]['used'] = False
+        licenses_cache[key]['username'] = None
+        save_licenses()
         
         embed = discord.Embed(
             title="🔄 Key Reset",
@@ -399,21 +421,16 @@ class VerificationHandler(BaseHTTPRequestHandler):
             key = data.get('key', '').upper()
             username = data.get('username', '')
             
-            with open(LICENSES_FILE, 'r') as f:
-                licenses = json.load(f)
-            
             response = {"valid": False}
             
-            if key not in licenses:
+            if key not in licenses_cache:
                 response["error"] = "Invalid key"
-            elif licenses[key].get('used') and licenses[key].get('username') != username:
+            elif licenses_cache[key].get('used') and licenses_cache[key].get('username') != username:
                 response["error"] = "Key already used"
             else:
-                licenses[key]['used'] = True
-                licenses[key]['username'] = username
-                
-                with open(LICENSES_FILE, 'w') as f:
-                    json.dump(licenses, f, indent=2)
+                licenses_cache[key]['used'] = True
+                licenses_cache[key]['username'] = username
+                save_licenses()
                 
                 response = {"valid": True, "message": "License verified"}
             
