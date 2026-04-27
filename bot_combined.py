@@ -380,7 +380,7 @@ class VerificationHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-def run_server(port=10000):
+def run_server(port):
     server = HTTPServer(('0.0.0.0', port), VerificationHandler)
     print(f"Verification server running on port {port}")
     server.serve_forever()
@@ -396,12 +396,13 @@ if __name__ == "__main__":
     
     print(f"Token found: {TOKEN[:10]}...{TOKEN[-4:]}")
     
-    # Start HTTP server in background thread
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-    print("HTTP server started on port 10000")
+    # Get port from environment or use default
+    PORT = int(os.environ.get("PORT", 80))
     
-    # Run Discord bot (main thread)
+    server_thread = threading.Thread(target=run_server, args=(PORT,), daemon=True)
+    server_thread.start()
+    print(f"HTTP server started on port {PORT}")
+    
     print("Starting Discord bot...")
     try:
         bot.run(TOKEN)
