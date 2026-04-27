@@ -385,14 +385,24 @@ def run_server(port=10000):
 
 # Run the bot
 if __name__ == "__main__":
-    TOKEN = os.environ.get("DISCORD_TOKEN", "YOUR_DISCORD_BOT_TOKEN_HERE")
-    if TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":
-        print("ERROR: Please set the DISCORD_TOKEN environment variable!")
+    TOKEN = os.environ.get("DISCORD_TOKEN")
+    if not TOKEN:
+        print("ERROR: DISCORD_TOKEN environment variable not set!")
+        print("Please set it in Render dashboard under Environment tab")
+        print("Exiting...")
         exit(1)
+    
+    print(f"Token found: {TOKEN[:10]}...{TOKEN[-4:]}")
     
     # Start HTTP server in background thread
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
+    print("HTTP server started on port 10000")
     
     # Run Discord bot (main thread)
-    bot.run(TOKEN)
+    print("Starting Discord bot...")
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print(f"Bot failed to start: {e}")
+        exit(1)
