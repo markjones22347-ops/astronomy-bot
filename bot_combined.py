@@ -126,10 +126,11 @@ class LicenseBot(commands.Bot):
                         color=discord.Color.red()
                     )
                     await interaction.response.send_message(embed=embed)
+                    cat = channel.category
                     await channel.delete()
                     # Delete category if empty
-                    if channel.category and len(channel.category.channels) == 0:
-                        await channel.category.delete()
+                    if cat and len(cat.channels) == 0:
+                        await cat.delete()
                 return
             
             # Remind support button
@@ -152,12 +153,11 @@ class LicenseBot(commands.Bot):
                     await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
                 return
         
-        # Fall through to default handling
-        await self.process_commands(interaction) if interaction.type == discord.InteractionType.application_command else None
+        # For all other interactions, use default handling
         try:
             await super().on_interaction(interaction)
-        except:
-            pass
+        except Exception as e:
+            print(f"on_interaction error: {e}")
     
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CommandNotFound):
@@ -405,64 +405,86 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         self.ticket_type = ticket_type
     
     async def on_submit(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        user = interaction.user
-        
-        # Find or create category named after the button
-        ticket_category = discord.utils.get(guild.categories, name=self.category)
-        if not ticket_category:
-            ticket_category = await guild.create_category(
-                name=self.category,
-                overwrites={
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    guild.get_role(bot.admin_role_id): discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
-                    guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                }
-            )
-        
-        # Create ticket channel inside the category
-        ticket_channel = await guild.create_text_channel(
-            f"{self.ticket_type.lower()}-{user.name}",
-            category=ticket_category,
-            overwrites={
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True),
-                guild.get_role(bot.admin_role_id): discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
-                guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        try:
+            guild = interaction.guild
+            user = interaction.user
+            
+            # Sanitize channel name (only lowercase, numbers, hyphens)
+            safe_name = ''.join(c.lower() if c.isalnum() else '-' for c in user.name).strip('-')
+            channel_name = f"{self.ticket_type.lower()}-{safe_name}"
+            
+            # Build category overwrites (skip None roles)
+            cat_overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False)
             }
-        )
-        
-        # Ping support role first
-        support_role = guild.get_role(SUPPORT_ROLE_ID)
-        if support_role:
-            await ticket_channel.send(f"{support_role.mention} New ticket created!")
-        
-        # Create ticket info embed
-        embed = discord.Embed(
-            title=f"🎫 Ticket - {self.category}",
-            color=None
-        )
-        embed.add_field(name="Type", value=self.ticket_type, inline=True)
-        embed.add_field(name="Created by", value=user.mention, inline=True)
-        embed.add_field(name="Issue", value=self.issue.value, inline=False)
-        if self.details.value:
-            embed.add_field(name="Details", value=self.details.value, inline=False)
-        embed.add_field(name="Media", value="Please send screenshots or videos in this ticket.", inline=False)
-        embed.set_footer(text=f"Ticket ID: {ticket_channel.id}")
-        
-        # Create persistent view with close and remind buttons
-        view = discord.ui.View(timeout=None)
-        
-        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{ticket_channel.id}")
-        view.add_item(close_button)
-        
-        remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary, custom_id=f"remind_ticket_{ticket_channel.id}")
-        view.add_item(remind_button)
-        
-        bot.add_view(view)
-        await ticket_channel.send(embed=embed, view=view)
-        
-        await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+            admin_role = guild.get_role(bot.admin_role_id)
+            if admin_role:
+                cat_overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            support_role = guild.get_role(SUPPORT_ROLE_ID)
+            if support_role:
+                cat_overwrites[support_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Find or create category named after the button
+            ticket_category = discord.utils.get(guild.categories, name=self.category)
+            if not ticket_category:
+                ticket_category = await guild.create_category(
+                    name=self.category,
+                    overwrites=cat_overwrites
+                )
+            
+            # Build channel overwrites
+            chan_overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True)
+            }
+            if admin_role:
+                chan_overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+            if support_role:
+                chan_overwrites[support_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Create ticket channel inside the category
+            ticket_channel = await guild.create_text_channel(
+                channel_name,
+                category=ticket_category,
+                overwrites=chan_overwrites
+            )
+            
+            # Ping support role first
+            if support_role:
+                await ticket_channel.send(f"{support_role.mention} New ticket created!")
+            
+            # Create ticket info embed
+            embed = discord.Embed(
+                title=f"🎫 Ticket - {self.category}",
+                color=None
+            )
+            embed.add_field(name="Type", value=self.ticket_type, inline=True)
+            embed.add_field(name="Created by", value=user.mention, inline=True)
+            embed.add_field(name="Issue", value=self.issue.value, inline=False)
+            if self.details.value:
+                embed.add_field(name="Details", value=self.details.value, inline=False)
+            embed.add_field(name="Media", value="Please send screenshots or videos in this ticket.", inline=False)
+            embed.set_footer(text=f"Ticket ID: {ticket_channel.id}")
+            
+            # Create persistent view with close and remind buttons
+            view = discord.ui.View(timeout=None)
+            
+            close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{ticket_channel.id}")
+            view.add_item(close_button)
+            
+            remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary, custom_id=f"remind_ticket_{ticket_channel.id}")
+            view.add_item(remind_button)
+            
+            bot.add_view(view)
+            await ticket_channel.send(embed=embed, view=view)
+            
+            await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+        except Exception as e:
+            print(f"Ticket modal error: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Error creating ticket: {str(e)}", ephemeral=True)
+            except:
+                pass
 
 @bot.tree.command(name="generate", description="Generate license keys (Admin only)")
 @app_commands.check(is_admin)
