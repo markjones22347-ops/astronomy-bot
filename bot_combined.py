@@ -279,22 +279,18 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             # Create embed
             embed = discord.Embed(
                 title="🎫 Support Ticket System",
-                description="Welcome to our support system! Please select a category below to create a ticket. Our team will assist you as soon as possible.",
+                description="Select a category below to create a ticket.",
                 color=None
             )
-            embed.add_field(name="📋 How to Create a Ticket", value="Click on one of the category buttons below to open a ticket channel. You can then describe your issue or question in detail.", inline=False)
-            embed.add_field(name="🛠️ Support Category", value="Technical support, bug reports, feature requests, general questions, and help with using our products.", inline=False)
-            embed.add_field(name="💳 Purchasing Category", value="Billing inquiries, payment issues, refunds, subscription management, and purchase assistance.", inline=False)
-            embed.add_field(name="📌 Guidelines", value="- Be descriptive about your issue\n- Provide screenshots if applicable\n- Be patient with response times\n- One ticket per issue", inline=False)
-            embed.add_field(name="⏰ Response Time", value="Our team typically responds within 24 hours. Urgent issues are prioritized.", inline=False)
-            embed.add_field(name="🔒 Privacy", value="All ticket channels are private and only visible to you and our support team.", inline=False)
-            embed.set_footer(text="Thank you for choosing us! We're here to help.")
+            embed.add_field(name="� Payment Methods & Pricing", value="**Price:** $10 (Lifetime Access)\n\nWe currently accept:\n• Gift Cards\n• PayPal\n• Robux\n\n**Coming Soon:**\n• Credit/Debit Cards (not available yet)\n\nWhen opening a purchase ticket, please include:\n• Your preferred payment method\n• Gift card type (if applicable)\n• Confirmation of the $10 purchase\n\nA staff member will assist you shortly.", inline=False)
+            embed.set_footer(text="All ticket channels are private and only visible to you and our support team.")
             
             # Create view with buttons
             view = discord.ui.View()
             
-            for label in button_labels:
-                button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+            for idx, label in enumerate(button_labels):
+                custom_id = f"ticket_btn_{idx}"
+                button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
                 button.callback = lambda i, l=label: self.create_ticket(i, l, self.welcome_message.value, ping_user_id)
                 view.add_item(button)
             
