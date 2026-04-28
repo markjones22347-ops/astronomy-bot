@@ -278,11 +278,14 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             
             # Create embed
             embed = discord.Embed(
-                title="🎫 Create a Ticket",
-                description="Click a button below to create a ticket.",
-                color=discord.Color.blue()
+                title="🎫 Support Ticket System",
+                description="Welcome to our support system! Please select a category below to create a ticket. Our team will assist you as soon as possible.",
+                color=None
             )
-            embed.set_footer(text="Select a category")
+            embed.add_field(name="Available Categories", value="Choose from the options below based on your needs:", inline=False)
+            embed.add_field(name="Support", value="Get help with general questions, issues, or technical support", inline=False)
+            embed.add_field(name="Purchasing", value="Assistance with purchases, billing, or upgrades", inline=False)
+            embed.set_footer(text="Response time: Usually within 24 hours")
             
             # Create view with buttons
             view = discord.ui.View()
