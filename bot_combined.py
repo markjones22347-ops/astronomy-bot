@@ -97,14 +97,15 @@ class LicenseBot(commands.Bot):
     async def setup_hook(self):
         init_db()
         await self.tree.sync()
-        self.tree.add_error_handler(self.on_command_error)
         
     async def on_ready(self):
         print(f'Bot logged in as {self.user}')
     
-    async def on_command_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.errors.CheckFailure):
-            await interaction.response.send_message("❌ Invalid whitelist: You are not authorized to use this command.", ephemeral=True)
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.CommandNotFound):
+            return  # Ignore unknown commands
+        if isinstance(error, commands.MissingRole):
+            await ctx.send("❌ Invalid whitelist: You are not authorized to use this command.")
         else:
             raise error
 
