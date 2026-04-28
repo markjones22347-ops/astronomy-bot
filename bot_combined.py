@@ -110,10 +110,9 @@ class LicenseBot(commands.Bot):
             if custom_id.startswith('ticket_'):
                 # Extract category from custom_id: ticket_CategoryName_idx
                 parts = custom_id.split('_')
-                # Remove "ticket" prefix and last part (idx), rejoin the rest
                 category = '_'.join(parts[1:-1]).replace('_', ' ')
-                modal = TicketDetailsModal(category, None, None)
-                await interaction.response.send_modal(modal)
+                view = TicketTypeSelect(category)
+                await interaction.response.send_message("Select ticket type:", view=view, ephemeral=True)
                 return
             
             # Close ticket button
@@ -128,6 +127,9 @@ class LicenseBot(commands.Bot):
                     )
                     await interaction.response.send_message(embed=embed)
                     await channel.delete()
+                    # Delete category if empty
+                    if channel.category and len(channel.category.channels) == 0:
+                        await channel.category.delete()
                 return
             
             # Remind support button
@@ -361,15 +363,26 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
         modal = TicketDetailsModal(category, welcome_message, ping_user_id)
         await interaction.response.send_modal(modal)
 
+# Ticket Type Select Dropdown
+class TicketTypeSelect(discord.ui.View):
+    def __init__(self, category):
+        super().__init__(timeout=60)
+        self.category = category
+    
+    @discord.ui.select(
+        placeholder="Select ticket type...",
+        options=[
+            discord.SelectOption(label="Support", description="Technical support, bugs, questions", emoji="🛠️", value="Support"),
+            discord.SelectOption(label="Purchase", description="Billing, payments, upgrades", emoji="💳", value="Purchase")
+        ]
+    )
+    async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
+        ticket_type = select.values[0]
+        modal = TicketDetailsModal(self.category, ticket_type)
+        await interaction.response.send_modal(modal)
+
 # Ticket Details Modal
 class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
-    issue_type = discord.ui.TextInput(
-        label="Type",
-        placeholder="Support / Purchase",
-        required=True,
-        max_length=20
-    )
-    
     issue = discord.ui.TextInput(
         label="Issue",
         placeholder="Describe your problem or request",
@@ -386,20 +399,31 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         style=discord.TextStyle.paragraph
     )
     
-    def __init__(self, category, welcome_message, ping_user_id):
+    def __init__(self, category, ticket_type):
         super().__init__()
         self.category = category
-        self.welcome_message = welcome_message
-        self.ping_user_id = ping_user_id
+        self.ticket_type = ticket_type
     
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         user = interaction.user
         
-        # Create ticket channel
+        # Find or create category named after the button
+        ticket_category = discord.utils.get(guild.categories, name=self.category)
+        if not ticket_category:
+            ticket_category = await guild.create_category(
+                name=self.category,
+                overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.get_role(bot.admin_role_id): discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
+                    guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+            )
+        
+        # Create ticket channel inside the category
         ticket_channel = await guild.create_text_channel(
-            f"ticket-{user.name}-{self.category.lower().replace(' ', '-')}",
-            category=guild.categories[0] if guild.categories else None,
+            f"{self.ticket_type.lower()}-{user.name}",
+            category=ticket_category,
             overwrites={
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True),
@@ -413,21 +437,12 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         if support_role:
             await ticket_channel.send(f"{support_role.mention} New ticket created!")
         
-        # Ping user if specified
-        if self.ping_user_id:
-            try:
-                ping_user = await bot.fetch_user(self.ping_user_id)
-                await ticket_channel.send(f"{ping_user.mention}")
-            except:
-                pass
-        
         # Create ticket info embed
         embed = discord.Embed(
             title=f"🎫 Ticket - {self.category}",
-            description=self.welcome_message,
             color=None
         )
-        embed.add_field(name="Type", value=self.issue_type.value, inline=True)
+        embed.add_field(name="Type", value=self.ticket_type, inline=True)
         embed.add_field(name="Created by", value=user.mention, inline=True)
         embed.add_field(name="Issue", value=self.issue.value, inline=False)
         if self.details.value:
