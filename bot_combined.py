@@ -293,6 +293,7 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
                 view.add_item(button)
             
             await interaction.response.send_message(embed=embed, view=view)
+            await interaction.delete_original_response()
             
         except ValueError:
             await interaction.response.send_message("Invalid button count. Please enter a number.", ephemeral=True)
