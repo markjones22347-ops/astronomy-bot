@@ -293,6 +293,7 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
                 view.add_item(button)
             
             await interaction.response.send_message(embed=embed, view=view)
+            await interaction.delete_original_response()
             
         except ValueError:
             await interaction.response.send_message("Invalid button count. Please enter a number.", ephemeral=True)
@@ -359,14 +360,12 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
     async def close_ticket(self, interaction: discord.Interaction, channel: discord.TextChannel):
         embed = discord.Embed(
             title="🔒 Ticket Closed",
-            description="This ticket has been closed.",
+            description=f"This ticket has been closed by {interaction.user.mention}.",
             color=discord.Color.red()
         )
-        embed.add_field(name="Closed by", value=interaction.user.mention, inline=True)
         
         await interaction.response.send_message(embed=embed)
-        await channel.set_permissions(interaction.guild.default_role, read_messages=False)
-        await channel.set_permissions(interaction.user, read_messages=False, send_messages=False)
+        await channel.delete()
     
     async def remind_support(self, interaction: discord.Interaction, channel: discord.TextChannel):
         # Check cooldown
