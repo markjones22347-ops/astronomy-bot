@@ -291,7 +291,7 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             for idx, label in enumerate(button_labels):
                 custom_id = f"ticket_btn_{idx}"
                 button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
-                button.callback = lambda i, l=label: self.create_ticket(i, l, self.welcome_message.value, ping_user_id)
+                button.callback = lambda i, l=label: self.open_ticket_modal(i, l, self.welcome_message.value, ping_user_id)
                 view.add_item(button)
             
             await interaction.response.send_message(embed=embed, view=view)
@@ -301,13 +301,48 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
         except Exception as e:
             await interaction.response.send_message(f"Error creating panel: {str(e)}", ephemeral=True)
     
-    async def create_ticket(self, interaction: discord.Interaction, category: str, welcome_message: str, ping_user_id: str):
+    async def open_ticket_modal(self, interaction: discord.Interaction, category: str, welcome_message: str, ping_user_id: str):
+        modal = TicketDetailsModal(category, welcome_message, ping_user_id)
+        await interaction.response.send_modal(modal)
+
+# Ticket Details Modal
+class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
+    issue_type = discord.ui.TextInput(
+        label="Type",
+        placeholder="Support / Purchase",
+        required=True,
+        max_length=20
+    )
+    
+    issue = discord.ui.TextInput(
+        label="Issue",
+        placeholder="Describe your problem or request",
+        required=True,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+    
+    details = discord.ui.TextInput(
+        label="Details",
+        placeholder="Steps, errors, or additional info",
+        required=False,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+    
+    def __init__(self, category, welcome_message, ping_user_id):
+        super().__init__()
+        self.category = category
+        self.welcome_message = welcome_message
+        self.ping_user_id = ping_user_id
+    
+    async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         user = interaction.user
         
         # Create ticket channel
         ticket_channel = await guild.create_text_channel(
-            f"ticket-{user.name}-{category.lower()}",
+            f"ticket-{user.name}-{self.category.lower().replace(' ', '-')}",
             category=guild.categories[0] if guild.categories else None,
             overwrites={
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -317,76 +352,73 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             }
         )
         
-        # Create welcome embed
+        # Ping support role first
+        support_role = guild.get_role(SUPPORT_ROLE_ID)
+        if support_role:
+            await ticket_channel.send(f"{support_role.mention} New ticket created!")
+        
+        # Ping user if specified
+        if self.ping_user_id:
+            try:
+                ping_user = await bot.fetch_user(self.ping_user_id)
+                await ticket_channel.send(f"{ping_user.mention}")
+            except:
+                pass
+        
+        # Create ticket info embed
         embed = discord.Embed(
-            title=f"🎫 Ticket - {category}",
-            description=welcome_message,
-            color=discord.Color.green()
+            title=f"🎫 Ticket - {self.category}",
+            description=self.welcome_message,
+            color=None
         )
+        embed.add_field(name="Type", value=self.issue_type.value, inline=True)
         embed.add_field(name="Created by", value=user.mention, inline=True)
-        embed.add_field(name="Category", value=category, inline=True)
+        embed.add_field(name="Issue", value=self.issue.value, inline=False)
+        if self.details.value:
+            embed.add_field(name="Details", value=self.details.value, inline=False)
+        embed.add_field(name="Media", value="Please send screenshots or videos in this ticket.", inline=False)
         embed.set_footer(text=f"Ticket ID: {ticket_channel.id}")
         
         # Create view with close and remind buttons
         view = discord.ui.View()
         
-        # Close button
         close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger)
-        close_button.callback = lambda i: self.close_ticket(i, ticket_channel)
+        close_button.callback = lambda i: close_ticket_func(i, ticket_channel)
         view.add_item(close_button)
         
-        # Remind button
         remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary)
-        remind_button.callback = lambda i: self.remind_support(i, ticket_channel)
+        remind_button.callback = lambda i: remind_support_func(i, ticket_channel)
         view.add_item(remind_button)
         
-        # Send welcome message
         await ticket_channel.send(embed=embed, view=view)
         
-        # Ping user if specified
-        if ping_user_id:
-            try:
-                ping_user = await bot.fetch_user(ping_user_id)
-                await ticket_channel.send(f"{ping_user.mention}")
-            except:
-                pass
-        
-        # Ping support role
-        support_role = guild.get_role(SUPPORT_ROLE_ID)
-        if support_role:
-            await ticket_channel.send(f"{support_role.mention} New ticket created!")
-        
         await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+
+async def close_ticket_func(interaction: discord.Interaction, channel: discord.TextChannel):
+    embed = discord.Embed(
+        title="🔒 Ticket Closed",
+        description=f"This ticket has been closed by {interaction.user.mention}.",
+        color=discord.Color.red()
+    )
+    await interaction.response.send_message(embed=embed)
+    await channel.delete()
+
+async def remind_support_func(interaction: discord.Interaction, channel: discord.TextChannel):
+    cooldown_key = f"{channel.id}_remind"
+    if cooldown_key in bot.ticket_reminders:
+        last_remind = bot.ticket_reminders[cooldown_key]
+        if datetime.now() - last_remind < timedelta(hours=1):
+            remaining = timedelta(hours=1) - (datetime.now() - last_remind)
+            await interaction.response.send_message(f"⏰ Remind on cooldown. Try again in {int(remaining.total_seconds() / 60)} minutes.", ephemeral=True)
+            return
     
-    async def close_ticket(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        embed = discord.Embed(
-            title="🔒 Ticket Closed",
-            description=f"This ticket has been closed by {interaction.user.mention}.",
-            color=discord.Color.red()
-        )
-        
-        await interaction.response.send_message(embed=embed)
-        await channel.delete()
+    bot.ticket_reminders[cooldown_key] = datetime.now()
     
-    async def remind_support(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        # Check cooldown
-        cooldown_key = f"{channel.id}_remind"
-        if cooldown_key in bot.ticket_reminders:
-            last_remind = bot.ticket_reminders[cooldown_key]
-            if datetime.now() - last_remind < timedelta(hours=1):
-                remaining = timedelta(hours=1) - (datetime.now() - last_remind)
-                await interaction.response.send_message(f"⏰ Remind on cooldown. Try again in {int(remaining.total_seconds() / 60)} minutes.", ephemeral=True)
-                return
-        
-        # Update cooldown
-        bot.ticket_reminders[cooldown_key] = datetime.now()
-        
-        # Ping support role
-        support_role = interaction.guild.get_role(SUPPORT_ROLE_ID)
-        if support_role:
-            await channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
-        
-        await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
+    support_role = interaction.guild.get_role(SUPPORT_ROLE_ID)
+    if support_role:
+        await channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
+    
+    await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
 
 @bot.tree.command(name="generate", description="Generate license keys (Admin only)")
 @app_commands.check(is_admin)
