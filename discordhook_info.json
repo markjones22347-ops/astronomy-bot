@@ -1,0 +1,37 @@
+{
+  "username": "Astronomy Client",
+  "avatar_url": "https://i.imgur.com/placeholder.png",
+  "embeds": [
+    {
+      "title": "🌌 Astronomy Client",
+      "description": "A powerful Minecraft client for 1.21.11",
+      "color": 5814783,
+      "fields": [
+        {
+          "name": "📦 Version",
+          "value": "1.21.11",
+          "inline": true
+        },
+        {
+          "name": "🧵 Mod Loader",
+          "value": "Fabric",
+          "inline": true
+        },
+        {
+          "name": "💰 Pricing",
+          "value": "**Lifetime:** $10 USD (one-time)\n**Monthly:** $5 USD\n**Weekly:** $2 USD",
+          "inline": false
+        },
+        {
+          "name": "🚀 Supported Launchers",
+          "value": "• Minecraft Launcher\n• Modrinth App\n• Feather Client\n• Prism Launcher",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "Astronomy Client - Premium Minecraft Utility"
+      },
+      "timestamp": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}

@@ -333,9 +333,9 @@ class TicketTypeSelect(discord.ui.View):
     @discord.ui.select(
         placeholder="Select ticket type...",
         options=[
-            discord.SelectOption(label="Purchase Lifetime", description="$10 one-time payment", emoji="💎", value="purchase-lifetime"),
-            discord.SelectOption(label="Purchase Monthly", description="Monthly subscription", emoji="📅", value="purchase-monthly"),
-            discord.SelectOption(label="Purchase Weekly", description="Weekly subscription", emoji="📆", value="purchase-weekly"),
+            discord.SelectOption(label="Purchase Lifetime", description="$10 USD one-time payment", emoji="💎", value="purchase-lifetime"),
+            discord.SelectOption(label="Purchase Monthly", description="$5 USD monthly subscription", emoji="📅", value="purchase-monthly"),
+            discord.SelectOption(label="Purchase Weekly", description="$2 USD weekly subscription", emoji="📆", value="purchase-weekly"),
             discord.SelectOption(label="General Inquiry", description="Questions, suggestions, or anything else", emoji="❓", value="general-inquiry")
         ]
     )
