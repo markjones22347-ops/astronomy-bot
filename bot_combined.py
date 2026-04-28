@@ -303,38 +303,44 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
 class TicketPanelView(discord.ui.View):
     def __init__(self, button_labels, welcome_message, ping_user_id):
         super().__init__(timeout=None)
-        self.button_labels = button_labels
         self.welcome_message = welcome_message
         self.ping_user_id = ping_user_id
         
         for idx, label in enumerate(button_labels):
-            custom_id = f"ticket_{label.replace(' ', '_')}_{idx}"
-            button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
-            button.callback = lambda i, l=label: self.open_ticket_modal(i, l, self.welcome_message, self.ping_user_id)
+            button = TicketButton(label, self.welcome_message, self.ping_user_id)
             self.add_item(button)
+
+class TicketButton(discord.ui.Button):
+    def __init__(self, label, welcome_message, ping_user_id):
+        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        self.category = label
+        self.welcome_message = welcome_message
+        self.ping_user_id = ping_user_id
     
-    async def open_ticket_modal(self, interaction: discord.Interaction, category: str, welcome_message: str, ping_user_id: str):
-        view = TicketTypeSelect(category)
+    async def callback(self, interaction: discord.Interaction):
+        view = TicketTypeSelect(self.category, self.welcome_message, self.ping_user_id)
         await interaction.response.send_message("Select ticket type:", view=view, ephemeral=True)
 
 # Ticket Type Select Dropdown
 class TicketTypeSelect(discord.ui.View):
-    def __init__(self, category):
+    def __init__(self, category, welcome_message, ping_user_id):
         super().__init__(timeout=60)
         self.category = category
+        self.welcome_message = welcome_message
+        self.ping_user_id = ping_user_id
     
     @discord.ui.select(
         placeholder="Select ticket type...",
         options=[
             discord.SelectOption(label="Purchase Lifetime", description="$10 one-time payment", emoji="💎", value="purchase-lifetime"),
-            discord.SelectOption(label="Purchase Monthly", description="Monthly subscription", emoji="�", value="purchase-monthly"),
+            discord.SelectOption(label="Purchase Monthly", description="Monthly subscription", emoji="📅", value="purchase-monthly"),
             discord.SelectOption(label="Purchase Weekly", description="Weekly subscription", emoji="📆", value="purchase-weekly"),
             discord.SelectOption(label="General Inquiry", description="Questions, suggestions, or anything else", emoji="❓", value="general-inquiry")
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
         ticket_type = select.values[0]
-        modal = TicketDetailsModal(self.category, ticket_type)
+        modal = TicketDetailsModal(self.category, ticket_type, self.welcome_message, self.ping_user_id)
         await interaction.response.send_modal(modal)
 
 # Ticket Details Modal
@@ -355,10 +361,12 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         style=discord.TextStyle.paragraph
     )
     
-    def __init__(self, category, ticket_type):
+    def __init__(self, category, ticket_type, welcome_message, ping_user_id):
         super().__init__()
         self.category = category
         self.ticket_type = ticket_type
+        self.welcome_message = welcome_message
+        self.ping_user_id = ping_user_id
         self.ticket_type_label = ticket_type.replace('-', ' ').title()
     
     async def on_submit(self, interaction: discord.Interaction):
@@ -410,9 +418,18 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
             if support_role:
                 await ticket_channel.send(f"{support_role.mention} New ticket created!")
             
+            # Ping user if specified
+            if self.ping_user_id:
+                try:
+                    ping_user = await bot.fetch_user(self.ping_user_id)
+                    await ticket_channel.send(f"{ping_user.mention}")
+                except:
+                    pass
+            
             # Create ticket info embed
             embed = discord.Embed(
                 title=f"🎫 Ticket - {self.category}",
+                description=self.welcome_message if self.welcome_message else None,
                 color=None
             )
             embed.add_field(name="Type", value=self.ticket_type_label, inline=True)
