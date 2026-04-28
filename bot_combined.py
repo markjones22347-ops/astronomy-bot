@@ -101,6 +101,62 @@ class LicenseBot(commands.Bot):
     async def on_ready(self):
         print(f'Bot logged in as {self.user}')
     
+    async def on_interaction(self, interaction: discord.Interaction):
+        # Handle button interactions for tickets
+        if interaction.type == discord.InteractionType.component:
+            custom_id = interaction.data.get('custom_id', '')
+            
+            # Ticket panel buttons
+            if custom_id.startswith('ticket_'):
+                # Extract category from custom_id: ticket_CategoryName_idx
+                parts = custom_id.split('_')
+                # Remove "ticket" prefix and last part (idx), rejoin the rest
+                category = '_'.join(parts[1:-1]).replace('_', ' ')
+                modal = TicketDetailsModal(category, None, None)
+                await interaction.response.send_modal(modal)
+                return
+            
+            # Close ticket button
+            if custom_id.startswith('close_ticket_'):
+                channel_id = int(custom_id.replace('close_ticket_', ''))
+                channel = interaction.guild.get_channel(channel_id)
+                if channel:
+                    embed = discord.Embed(
+                        title="🔒 Ticket Closed",
+                        description=f"This ticket has been closed by {interaction.user.mention}.",
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.send_message(embed=embed)
+                    await channel.delete()
+                return
+            
+            # Remind support button
+            if custom_id.startswith('remind_ticket_'):
+                channel_id = int(custom_id.replace('remind_ticket_', ''))
+                channel = interaction.guild.get_channel(channel_id)
+                if channel:
+                    cooldown_key = f"{channel_id}_remind"
+                    if cooldown_key in self.ticket_reminders:
+                        last_remind = self.ticket_reminders[cooldown_key]
+                        if datetime.now() - last_remind < timedelta(hours=1):
+                            remaining = timedelta(hours=1) - (datetime.now() - last_remind)
+                            await interaction.response.send_message(f"⏰ Remind on cooldown. Try again in {int(remaining.total_seconds() / 60)} minutes.", ephemeral=True)
+                            return
+                    
+                    self.ticket_reminders[cooldown_key] = datetime.now()
+                    support_role = interaction.guild.get_role(SUPPORT_ROLE_ID)
+                    if support_role:
+                        await channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
+                    await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
+                return
+        
+        # Fall through to default handling
+        await self.process_commands(interaction) if interaction.type == discord.InteractionType.application_command else None
+        try:
+            await super().on_interaction(interaction)
+        except:
+            pass
+    
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CommandNotFound):
             return  # Ignore unknown commands
@@ -285,15 +341,15 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             embed.add_field(name="� Payment Methods & Pricing", value="**Price:** $10 (Lifetime Access)\n\nWe currently accept:\n• Gift Cards\n• PayPal\n• Robux\n\n**Coming Soon:**\n• Credit/Debit Cards (not available yet)\n\nWhen opening a purchase ticket, please include:\n• Your preferred payment method\n• Gift card type (if applicable)\n• Confirmation of the $10 purchase\n\nA staff member will assist you shortly.", inline=False)
             embed.set_footer(text="All ticket channels are private and only visible to you and our support team.")
             
-            # Create view with buttons
-            view = discord.ui.View()
+            # Create persistent view with buttons
+            view = discord.ui.View(timeout=None)
             
             for idx, label in enumerate(button_labels):
-                custom_id = f"ticket_btn_{idx}"
+                custom_id = f"ticket_{label.replace(' ', '_')}_{idx}"
                 button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
-                button.callback = lambda i, l=label: self.open_ticket_modal(i, l, self.welcome_message.value, ping_user_id)
                 view.add_item(button)
             
+            bot.add_view(view)
             await interaction.response.send_message(embed=embed, view=view)
             
         except ValueError:
@@ -379,46 +435,19 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         embed.add_field(name="Media", value="Please send screenshots or videos in this ticket.", inline=False)
         embed.set_footer(text=f"Ticket ID: {ticket_channel.id}")
         
-        # Create view with close and remind buttons
-        view = discord.ui.View()
+        # Create persistent view with close and remind buttons
+        view = discord.ui.View(timeout=None)
         
-        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger)
-        close_button.callback = lambda i: close_ticket_func(i, ticket_channel)
+        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{ticket_channel.id}")
         view.add_item(close_button)
         
-        remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary)
-        remind_button.callback = lambda i: remind_support_func(i, ticket_channel)
+        remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary, custom_id=f"remind_ticket_{ticket_channel.id}")
         view.add_item(remind_button)
         
+        bot.add_view(view)
         await ticket_channel.send(embed=embed, view=view)
         
         await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
-
-async def close_ticket_func(interaction: discord.Interaction, channel: discord.TextChannel):
-    embed = discord.Embed(
-        title="🔒 Ticket Closed",
-        description=f"This ticket has been closed by {interaction.user.mention}.",
-        color=discord.Color.red()
-    )
-    await interaction.response.send_message(embed=embed)
-    await channel.delete()
-
-async def remind_support_func(interaction: discord.Interaction, channel: discord.TextChannel):
-    cooldown_key = f"{channel.id}_remind"
-    if cooldown_key in bot.ticket_reminders:
-        last_remind = bot.ticket_reminders[cooldown_key]
-        if datetime.now() - last_remind < timedelta(hours=1):
-            remaining = timedelta(hours=1) - (datetime.now() - last_remind)
-            await interaction.response.send_message(f"⏰ Remind on cooldown. Try again in {int(remaining.total_seconds() / 60)} minutes.", ephemeral=True)
-            return
-    
-    bot.ticket_reminders[cooldown_key] = datetime.now()
-    
-    support_role = interaction.guild.get_role(SUPPORT_ROLE_ID)
-    if support_role:
-        await channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
-    
-    await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
 
 @bot.tree.command(name="generate", description="Generate license keys (Admin only)")
 @app_commands.check(is_admin)
