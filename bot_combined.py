@@ -5,10 +5,15 @@ import secrets
 import string
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import requests
+
+# Role IDs
+ADMIN_ROLE_ID = 1498479431906230393
+TICKET_MANAGER_ROLE_ID = 1498479846286692578
+SUPPORT_ROLE_ID = 1498478824273219616
 
 # Load .env file if present
 try:
@@ -86,7 +91,8 @@ def generate_key():
 class LicenseBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix='!', intents=discord.Intents.default())
-        self.admin_ids = [1484746407700074598, 1482917635417964797]  # Admin Discord IDs
+        self.admin_role_id = ADMIN_ROLE_ID
+        self.ticket_reminders = {}  # Track reminder cooldowns
         
     async def setup_hook(self):
         init_db()
@@ -210,8 +216,176 @@ class RegistrationModal(discord.ui.Modal, title="Register Your License"):
             ephemeral=True
         )
 
-def is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.id in bot.admin_ids
+def is_admin(interaction) -> bool:
+    if not interaction.guild:
+        return False
+    role = interaction.guild.get_role(bot.admin_role_id)
+    user = interaction.user if hasattr(interaction, 'user') else interaction.author
+    return role in user.roles
+
+def is_ticket_manager(interaction) -> bool:
+    if not interaction.guild:
+        return False
+    role = interaction.guild.get_role(TICKET_MANAGER_ROLE_ID)
+    user = interaction.user if hasattr(interaction, 'user') else interaction.author
+    return role in user.roles
+
+# Ticket Configuration Modal
+class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
+    button_count = discord.ui.TextInput(
+        label="Number of buttons",
+        placeholder="1-5",
+        required=True,
+        max_length=1
+    )
+    
+    button_labels = discord.ui.TextInput(
+        label="Button labels (comma-separated)",
+        placeholder="Support, General, Billing",
+        required=True,
+        max_length=100
+    )
+    
+    welcome_message = discord.ui.TextInput(
+        label="Welcome message for tickets",
+        placeholder="Welcome! Please describe your issue.",
+        required=True,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+    
+    ping_user_id = discord.ui.TextInput(
+        label="User ID to ping (leave empty for none)",
+        placeholder="123456789012345678",
+        required=False,
+        max_length=20
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            button_count = int(self.button_count.value)
+            if button_count < 1 or button_count > 5:
+                await interaction.response.send_message("Button count must be between 1 and 5", ephemeral=True)
+                return
+            
+            button_labels = [label.strip() for label in self.button_labels.value.split(',')]
+            if len(button_labels) != button_count:
+                await interaction.response.send_message(f"Button count ({button_count}) doesn't match number of labels ({len(button_labels)})", ephemeral=True)
+                return
+            
+            ping_user_id = self.ping_user_id.value.strip() if self.ping_user_id.value.strip() else None
+            
+            # Create embed
+            embed = discord.Embed(
+                title="🎫 Create a Ticket",
+                description="Click a button below to create a ticket.",
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="Select a category")
+            
+            # Create view with buttons
+            view = discord.ui.View()
+            
+            for label in button_labels:
+                button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+                button.callback = lambda i, l=label: self.create_ticket(i, l, self.welcome_message.value, ping_user_id)
+                view.add_item(button)
+            
+            await interaction.response.send_message(embed=embed, view=view)
+            
+        except ValueError:
+            await interaction.response.send_message("Invalid button count. Please enter a number.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Error creating panel: {str(e)}", ephemeral=True)
+    
+    async def create_ticket(self, interaction: discord.Interaction, category: str, welcome_message: str, ping_user_id: str):
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Create ticket channel
+        ticket_channel = await guild.create_text_channel(
+            f"ticket-{user.name}-{category.lower()}",
+            category=guild.categories[0] if guild.categories else None,
+            overwrites={
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True),
+                guild.get_role(bot.admin_role_id): discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True),
+                guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+        )
+        
+        # Create welcome embed
+        embed = discord.Embed(
+            title=f"🎫 Ticket - {category}",
+            description=welcome_message,
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Created by", value=user.mention, inline=True)
+        embed.add_field(name="Category", value=category, inline=True)
+        embed.set_footer(text=f"Ticket ID: {ticket_channel.id}")
+        
+        # Create view with close and remind buttons
+        view = discord.ui.View()
+        
+        # Close button
+        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger)
+        close_button.callback = lambda i: self.close_ticket(i, ticket_channel)
+        view.add_item(close_button)
+        
+        # Remind button
+        remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary)
+        remind_button.callback = lambda i: self.remind_support(i, ticket_channel)
+        view.add_item(remind_button)
+        
+        # Send welcome message
+        await ticket_channel.send(embed=embed, view=view)
+        
+        # Ping user if specified
+        if ping_user_id:
+            try:
+                ping_user = await bot.fetch_user(ping_user_id)
+                await ticket_channel.send(f"{ping_user.mention}")
+            except:
+                pass
+        
+        # Ping support role
+        support_role = guild.get_role(SUPPORT_ROLE_ID)
+        if support_role:
+            await ticket_channel.send(f"{support_role.mention} New ticket created!")
+        
+        await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+    
+    async def close_ticket(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        embed = discord.Embed(
+            title="🔒 Ticket Closed",
+            description="This ticket has been closed.",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Closed by", value=interaction.user.mention, inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+        await channel.set_permissions(interaction.guild.default_role, read_messages=False)
+        await channel.set_permissions(interaction.user, read_messages=False, send_messages=False)
+    
+    async def remind_support(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        # Check cooldown
+        cooldown_key = f"{channel.id}_remind"
+        if cooldown_key in bot.ticket_reminders:
+            last_remind = bot.ticket_reminders[cooldown_key]
+            if datetime.now() - last_remind < timedelta(hours=1):
+                remaining = timedelta(hours=1) - (datetime.now() - last_remind)
+                await interaction.response.send_message(f"⏰ Remind on cooldown. Try again in {int(remaining.total_seconds() / 60)} minutes.", ephemeral=True)
+                return
+        
+        # Update cooldown
+        bot.ticket_reminders[cooldown_key] = datetime.now()
+        
+        # Ping support role
+        support_role = interaction.guild.get_role(SUPPORT_ROLE_ID)
+        if support_role:
+            await channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
+        
+        await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
 
 @bot.tree.command(name="generate", description="Generate license keys (Admin only)")
 @app_commands.check(is_admin)
@@ -498,6 +672,17 @@ async def register(interaction: discord.Interaction):
     # Show the registration modal
     modal = RegistrationModal()
     await interaction.response.send_modal(modal)
+
+# Prefix command for ticket panel creation
+@bot.command(name='ticket')
+async def ticket_command(ctx):
+    """Create a ticket panel (Ticket Manager only)"""
+    if not is_ticket_manager(ctx):
+        await ctx.send("❌ Invalid whitelist: You are not authorized to use this command.")
+        return
+    
+    modal = TicketPanelModal()
+    await ctx.send_modal(modal)
 
 # Simple HTTP server for mod verification
 class VerificationHandler(BaseHTTPRequestHandler):
