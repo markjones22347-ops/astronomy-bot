@@ -372,8 +372,10 @@ class TicketTypeSelect(discord.ui.View):
     @discord.ui.select(
         placeholder="Select ticket type...",
         options=[
-            discord.SelectOption(label="Support", description="Technical support, bugs, questions", emoji="🛠️", value="Support"),
-            discord.SelectOption(label="Purchase", description="Billing, payments, upgrades", emoji="💳", value="Purchase")
+            discord.SelectOption(label="Purchase Lifetime", description="$10 one-time payment", emoji="💎", value="purchase-lifetime"),
+            discord.SelectOption(label="Purchase Monthly", description="Monthly subscription", emoji="�", value="purchase-monthly"),
+            discord.SelectOption(label="Purchase Weekly", description="Weekly subscription", emoji="📆", value="purchase-weekly"),
+            discord.SelectOption(label="General Inquiry", description="Questions, suggestions, or anything else", emoji="❓", value="general-inquiry")
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -403,6 +405,7 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
         super().__init__()
         self.category = category
         self.ticket_type = ticket_type
+        self.ticket_type_label = ticket_type.replace('-', ' ').title()
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -458,7 +461,7 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
                 title=f"🎫 Ticket - {self.category}",
                 color=None
             )
-            embed.add_field(name="Type", value=self.ticket_type, inline=True)
+            embed.add_field(name="Type", value=self.ticket_type_label, inline=True)
             embed.add_field(name="Created by", value=user.mention, inline=True)
             embed.add_field(name="Issue", value=self.issue.value, inline=False)
             if self.details.value:
