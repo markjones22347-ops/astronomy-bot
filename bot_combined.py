@@ -299,20 +299,11 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
         modal = TicketDetailsModal(category, welcome_message, ping_user_id)
         await interaction.response.send_modal(modal)
 
-# Persistent Ticket Panel View
-class TicketPanelView(discord.ui.View):
-    def __init__(self, button_labels, welcome_message, ping_user_id):
-        super().__init__(timeout=None)
-        self.welcome_message = welcome_message
-        self.ping_user_id = ping_user_id
-        
-        for idx, label in enumerate(button_labels):
-            button = TicketButton(label, self.welcome_message, self.ping_user_id)
-            self.add_item(button)
-
-class TicketButton(discord.ui.Button):
+# Custom Button class for ticket panel buttons
+class TicketPanelButton(discord.ui.Button):
     def __init__(self, label, welcome_message, ping_user_id):
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
+        custom_id = f"ticket_{label.replace(' ', '_')}"
+        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=custom_id)
         self.category = label
         self.welcome_message = welcome_message
         self.ping_user_id = ping_user_id
@@ -320,6 +311,16 @@ class TicketButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         view = TicketTypeSelect(self.category, self.welcome_message, self.ping_user_id)
         await interaction.response.send_message("Select ticket type:", view=view, ephemeral=True)
+
+# Persistent Ticket Panel View
+class TicketPanelView(discord.ui.View):
+    def __init__(self, button_labels, welcome_message, ping_user_id):
+        super().__init__(timeout=None)
+        
+        for idx, label in enumerate(button_labels):
+            button = TicketPanelButton(label, welcome_message, ping_user_id)
+            button.row = idx // 5
+            self.add_item(button)
 
 # Ticket Type Select Dropdown
 class TicketTypeSelect(discord.ui.View):
@@ -453,21 +454,13 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
             except:
                 pass
 
-# Persistent Ticket Control View (Close/Remind buttons)
-class TicketControlView(discord.ui.View):
+# Custom button classes for ticket control
+class CloseTicketButton(discord.ui.Button):
     def __init__(self, channel):
-        super().__init__(timeout=None)
+        super().__init__(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id=f"close_ticket_{channel.id}")
         self.channel = channel
-        
-        close_button = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger)
-        close_button.callback = self.close_ticket
-        self.add_item(close_button)
-        
-        remind_button = discord.ui.Button(label="Remind Support", style=discord.ButtonStyle.secondary)
-        remind_button.callback = self.remind_support
-        self.add_item(remind_button)
     
-    async def close_ticket(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="🔒 Ticket Closed",
             description=f"This ticket has been closed by {interaction.user.mention}.",
@@ -476,11 +469,15 @@ class TicketControlView(discord.ui.View):
         await interaction.response.send_message(embed=embed)
         cat = self.channel.category
         await self.channel.delete()
-        # Delete category if empty
         if cat and len(cat.channels) == 0:
             await cat.delete()
+
+class RemindSupportButton(discord.ui.Button):
+    def __init__(self, channel):
+        super().__init__(label="Remind Support", style=discord.ButtonStyle.secondary, custom_id=f"remind_ticket_{channel.id}")
+        self.channel = channel
     
-    async def remind_support(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction):
         cooldown_key = f"{self.channel.id}_remind"
         if cooldown_key in bot.ticket_reminders:
             last_remind = bot.ticket_reminders[cooldown_key]
@@ -494,6 +491,13 @@ class TicketControlView(discord.ui.View):
         if support_role:
             await self.channel.send(f"🔔 {support_role.mention} Reminder: Please check this ticket!")
         await interaction.response.send_message("✅ Support team has been reminded!", ephemeral=True)
+
+# Persistent Ticket Control View (Close/Remind buttons)
+class TicketControlView(discord.ui.View):
+    def __init__(self, channel):
+        super().__init__(timeout=None)
+        self.add_item(CloseTicketButton(channel))
+        self.add_item(RemindSupportButton(channel))
 
 @bot.tree.command(name="generate", description="Generate license keys (Admin only)")
 @app_commands.check(is_admin)
