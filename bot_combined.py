@@ -674,16 +674,12 @@ async def register(interaction: discord.Interaction):
     modal = RegistrationModal()
     await interaction.response.send_modal(modal)
 
-# Prefix command for ticket panel creation
-@bot.command(name='ticket')
-async def ticket_command(ctx):
+@bot.tree.command(name="ticket", description="Create a ticket panel (Ticket Manager only)")
+@app_commands.check(is_ticket_manager)
+async def ticket_command(interaction: discord.Interaction):
     """Create a ticket panel (Ticket Manager only)"""
-    if not is_ticket_manager(ctx):
-        await ctx.send("❌ Invalid whitelist: You are not authorized to use this command.")
-        return
-    
     modal = TicketPanelModal()
-    await ctx.send_modal(modal)
+    await interaction.response.send_modal(modal)
 
 # Simple HTTP server for mod verification
 class VerificationHandler(BaseHTTPRequestHandler):
