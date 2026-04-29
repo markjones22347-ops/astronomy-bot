@@ -867,6 +867,60 @@ class VerificationHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def do_POST(self):
+        if self.path == '/api/generate-license':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                data = json.loads(post_data.decode())
+                email = data.get('email', '')
+                duration = data.get('duration', 'lifetime')
+                stripe_session_id = data.get('stripe_session_id', '')
+                
+                # Calculate expiration
+                now = datetime.now()
+                if duration == 'lifetime':
+                    expires_at = None
+                elif duration == 'monthly':
+                    expires_at = (now + timedelta(days=30)).isoformat()
+                elif duration == 'weekly':
+                    expires_at = (now + timedelta(days=7)).isoformat()
+                else:
+                    expires_at = None
+                
+                # Generate key
+                key = generate_key()
+                licenses_cache[key] = {
+                    'username': email,  # Use email as username for now
+                    'generated_by': 'stripe_webhook',
+                    'generated_at': now.isoformat(),
+                    'used': True,
+                    'duration': duration,
+                    'expires_at': expires_at,
+                    'stripe_session_id': stripe_session_id
+                }
+                save_licenses()
+                
+                response = {
+                    "success": True,
+                    "key": key,
+                    "duration": duration,
+                    "expires_at": expires_at
+                }
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode())
+                
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+            return
+        
         if self.path != '/verify':
             self.send_response(404)
             self.end_headers()
