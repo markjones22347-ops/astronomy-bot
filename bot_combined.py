@@ -28,10 +28,12 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
 # In-memory cache
 licenses_cache = {}
+ticket_panels_cache = {}  # Store ticket panel configurations
+ticket_controls_cache = {}  # Store ticket control configurations (close/remind buttons)
 
 def load_licenses():
     """Load licenses from GitHub Gist"""
-    global licenses_cache
+    global licenses_cache, ticket_panels_cache, ticket_controls_cache
     if not GIST_ID or not GITHUB_TOKEN:
         print("WARNING: GIST_ID or GITHUB_TOKEN not set. Using in-memory storage (will lose data on restart)")
         return licenses_cache
@@ -47,7 +49,13 @@ def load_licenses():
                 if filename == "licenses.json":
                     licenses_cache = json.loads(file_data['content'])
                     print(f"Loaded {len(licenses_cache)} licenses from Gist")
-                    return licenses_cache
+                elif filename == "ticket_panels.json":
+                    ticket_panels_cache = json.loads(file_data['content'])
+                    print(f"Loaded {len(ticket_panels_cache)} ticket panels from Gist")
+                elif filename == "ticket_controls.json":
+                    ticket_controls_cache = json.loads(file_data['content'])
+                    print(f"Loaded {len(ticket_controls_cache)} ticket controls from Gist")
+            return licenses_cache
     except Exception as e:
         print(f"Failed to load from Gist: {e}")
     
@@ -66,13 +74,19 @@ def save_licenses():
             "files": {
                 "licenses.json": {
                     "content": json.dumps(licenses_cache, indent=2)
+                },
+                "ticket_panels.json": {
+                    "content": json.dumps(ticket_panels_cache, indent=2)
+                },
+                "ticket_controls.json": {
+                    "content": json.dumps(ticket_controls_cache, indent=2)
                 }
             }
         }
         response = requests.patch(url, headers=headers, json=data)
         
         if response.status_code == 200:
-            print(f"Saved {len(licenses_cache)} licenses to Gist")
+            print(f"Saved {len(licenses_cache)} licenses, {len(ticket_panels_cache)} ticket panels, and {len(ticket_controls_cache)} ticket controls to Gist")
         else:
             print(f"Failed to save to Gist: {response.status_code}")
     except Exception as e:
@@ -97,6 +111,28 @@ class LicenseBot(commands.Bot):
     async def setup_hook(self):
         init_db()
         await self.tree.sync()
+        # Restore persistent views from cache
+        for panel_id, panel_data in ticket_panels_cache.items():
+            view = TicketPanelView(panel_data['button_labels'], panel_data['welcome_message'], panel_data.get('ping_user_id'))
+            self.add_view(view)
+            print(f"Restored persistent view for ticket panel: {panel_id}")
+        
+        # Restore ticket control views
+        for channel_id, control_data in list(ticket_controls_cache.items()):
+            try:
+                channel = self.get_channel(int(channel_id))
+                if channel:
+                    view = TicketControlView(channel)
+                    self.add_view(view)
+                    print(f"Restored persistent view for ticket control: {channel_id}")
+                else:
+                    # Channel no longer exists, remove from cache
+                    del ticket_controls_cache[channel_id]
+            except:
+                # Channel no longer exists, remove from cache
+                del ticket_controls_cache[channel_id]
+        
+        save_licenses()
         
     async def on_ready(self):
         print(f'Bot logged in as {self.user}')
@@ -288,6 +324,18 @@ class TicketPanelModal(discord.ui.Modal, title="Create Ticket Panel"):
             # Create persistent view with buttons
             view = TicketPanelView(button_labels, self.welcome_message.value, ping_user_id)
             bot.add_view(view)
+            
+            # Save panel configuration to cache
+            panel_id = f"panel_{interaction.channel_id}_{datetime.now().timestamp()}"
+            ticket_panels_cache[panel_id] = {
+                'button_labels': button_labels,
+                'welcome_message': self.welcome_message.value,
+                'ping_user_id': ping_user_id,
+                'channel_id': interaction.channel_id,
+                'created_at': datetime.now().isoformat()
+            }
+            save_licenses()
+            
             await interaction.response.send_message(embed=embed, view=view)
             
         except ValueError:
@@ -444,6 +492,14 @@ class TicketDetailsModal(discord.ui.Modal, title="Ticket Details"):
             # Create persistent view with close and remind buttons
             view = TicketControlView(ticket_channel)
             bot.add_view(view)
+            
+            # Save ticket control configuration
+            ticket_controls_cache[str(ticket_channel.id)] = {
+                'channel_id': ticket_channel.id,
+                'created_at': datetime.now().isoformat()
+            }
+            save_licenses()
+            
             await ticket_channel.send(embed=embed, view=view)
             
             await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
@@ -467,6 +523,13 @@ class CloseTicketButton(discord.ui.Button):
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed)
+        
+        # Remove from cache
+        channel_id_str = str(self.channel.id)
+        if channel_id_str in ticket_controls_cache:
+            del ticket_controls_cache[channel_id_str]
+            save_licenses()
+        
         cat = self.channel.category
         await self.channel.delete()
         if cat and len(cat.channels) == 0:
